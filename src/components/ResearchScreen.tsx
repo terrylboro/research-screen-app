@@ -87,17 +87,24 @@ export default function ResearchScreen() {
 
               {/* <Switch mt="md" defaultChecked label="Show arrows" onChange={() => treatment.setShowGuidanceArrows(!treatment.showGuidanceArrows)}/> */}
 
-              <Button onClick={() => treatment.dispatch({ type: 'PROGRESS' })}>
+              <Button
+                h={48}
+                onClick={() => treatment.dispatch({ type: 'PROGRESS' })}
+              >
                 Progress Stage
               </Button>
 
-              <Button onClick={() => treatment.dispatch({ type: 'RESET_PROGRESS' })}>
+              <Button
+                h={48}
+                onClick={() => treatment.dispatch({ type: 'RESET_PROGRESS' })}
+              >
                 Restart Manoeuvre
               </Button>
 
               <Text fw={600}>Recording</Text>
               
               <Button
+                h={48}
                 variant={treatment.isRecording ? 'light' : 'filled'}
                 color={treatment.isRecording ? 'red' : 'blue'}
                 onClick={() => {
