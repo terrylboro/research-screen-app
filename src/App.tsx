@@ -1,5 +1,7 @@
-import { AppShell, Badge, Button, Group, Select, Text, useMantineTheme } from '@mantine/core';
+import { useState } from 'react';
+import { AppShell, Badge, Button, Group, Modal, Select, Text, useMantineTheme } from '@mantine/core';
 import ResearchScreen from './components/ResearchScreen';
+import GyroscopeCalibration from './components/GyroscopeCalibration';
 import { useBleDevice } from './context/BleProvider';
 import { useTreatment } from './context/TreatmentProvider';
 import { CanalType, EarSide } from './types/treatmentTypes';
@@ -8,6 +10,7 @@ function App(): JSX.Element {
   const theme = useMantineTheme();
   const ble = useBleDevice();
   const treatment = useTreatment();
+  const [calibrationOpen, setCalibrationOpen] = useState(false);
 
   const selectEar = (ear: string | null) => {
     if (ear === 'left' || ear === 'right') {
@@ -61,9 +64,33 @@ function App(): JSX.Element {
             >
               {ble.connected ? 'Disconnect' : 'Connect Bluetooth'}
             </Button>
+            <Button
+              color="teal"
+              disabled={!ble.connected}
+              onClick={() => setCalibrationOpen(true)}
+            >
+              Calibrate gyroscope
+            </Button>
+            <Button
+              color="cyan"
+              disabled={!ble.connected}
+              onClick={treatment.calibrateOffset}
+            >
+              Recenter head
+            </Button>
           </Group>
         </Group>
       </AppShell.Header>
+
+      <Modal
+        opened={calibrationOpen}
+        onClose={() => setCalibrationOpen(false)}
+        title="Gyroscope calibration"
+        centered
+        closeOnClickOutside={false}
+      >
+        <GyroscopeCalibration onComplete={() => setCalibrationOpen(false)} />
+      </Modal>
 
       <AppShell.Main style={{ height: '100vh', overflow: 'hidden', background: theme.colors.gray[0] }}>
         {ble.error && (
