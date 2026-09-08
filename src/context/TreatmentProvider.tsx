@@ -11,13 +11,13 @@ import React, {
 // import * as THREE from 'three';
 import { Euler, Matrix4, Quaternion } from 'three';
 import { useBleDevice } from './BleProvider';
-import { decodeNumericIMUPacket } from '../utils/imuDecoder';
+import { decodeIMUPacket, getConsecutiveImuPacketDeltaMs, IMUPacketTiming } from '../utils/imuDecoder';
+import type { ReceivedMessage } from '../hooks/useBleDeviceInternal';
 
-// Import your existing Madgwick module here
-// Example only — replace with your actual import:
-import { MadgwickFilter } from '../utils/madgwickFilter';
+import { calculateHeadAngles } from '../utils/headKinematics';
+import { samplesToCsv } from '../utils/recordingCsv';
+import { MahonyImuFilter } from '../utils/mahonyImuFilter';
 import { changeQuaternionBase } from '../utils/changeBase';
-import { applyEarAxisBasis } from '../utils/earAxisBasis';
 
 import { treatmentReducer, initialState } from './treatmentReducer';
 import { TreatmentState, Action, EarSide, CanalType, TreatmentStage } from '../types/treatmentTypes';
@@ -76,6 +76,8 @@ type TreatmentContextValue = {
   }>;
 
   isRecording: boolean;
+  saveAsJson: boolean;
+  setSaveAsJson: (enabled: boolean) => void;
   startRecording: () => void;
   stopRecording: () => void;
 
@@ -89,18 +91,38 @@ type TreatmentContextValue = {
 };
 
 type RecordedImuSample = {
-  timestamp: number;
-  relativeTimestampMs: number;
-  treatmentStage: string;
+  receivedAt: string;
+  elapsedMs: number;
+  packetSequence: number;
+  packetFrameIndex: number;
+  deviceTimestampMs: number;
+  sensorTimelineMs: number;
+  frameIntervalMs: number | null;
+  timingDiscontinuity: boolean;
+  fusionUpdated: boolean;
+  currentPosition: string;
   ax: number;
   ay: number;
   az: number;
   gx: number;
   gy: number;
   gz: number;
-  roll: number;
-  pitch: number;
-  yaw: number;
+  axG: number;
+  ayG: number;
+  azG: number;
+  gxDps: number;
+  gyDps: number;
+  gzDps: number;
+  quaternionW: number;
+  quaternionX: number;
+  quaternionY: number;
+  quaternionZ: number;
+  rollDegrees: number;
+  pitchDegrees: number;
+  yawDegrees: number;
+  flexionDegrees: number | null;
+  axialRotationDegrees: number | null;
+  lateralFlexionDegrees: number | null;
 };
 
 export type GyroscopeOffsets = {
@@ -119,7 +141,7 @@ export type LatestImuSample = {
   gz: number;
 };
 
-const GYROSCOPE_OFFSETS_STORAGE_KEY = 'headspin_ble_gyroscope_offsets';
+const GYROSCOPE_OFFSETS_STORAGE_KEY = 'headspin_ble_gyroscope_offsets_70mdps_v2';
 
 function isGyroscopeOffsets(value: unknown): value is GyroscopeOffsets {
   if (!value || typeof value !== 'object') {
@@ -203,6 +225,18 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
   // Access BLE data from provider
   const ble = useBleDevice();
 
+  useEffect(() => ble.subscribeToButtonMessages((message) => {
+    // Firmware navigation commands: uint8 or little-endian uint16.
+    // Ignore empty, malformed and unrelated notifications (e.g. power-down).
+    if (message.data.byteLength !== 1 && message.data.byteLength !== 2) return;
+    const command = message.data.byteLength === 2
+      ? message.data.getUint16(0, true)
+      : message.data.getUint8(0);
+    if (command === 1) dispatch({ type: 'PROGRESS' });
+    if (command === 2) dispatch({ type: 'RETURN_TO_PREVIOUS_STAGE' });
+  }), [ble.subscribeToButtonMessages]);
+
+
   const [affectedEar, setAffectedEar] = useState<EarSide>(null);
   const [affectedCanal, setAffectedCanal] = useState<CanalType>('posterior');
   const [selectedCanals, setSelectedCanals] = useState<string[]>([]);
@@ -223,6 +257,7 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
   const [showGuidanceArrows, setShowGuidanceArrows] = useState(true);
 
   const [isRecording, setIsRecording] = useState(false);
+  const [saveAsJson, setSaveAsJson] = useState(false);
 
   const matrixRef = useRef(new Matrix4());
   const offsetMatrixRef = useRef(new Matrix4());
@@ -240,22 +275,25 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
   const alignedRef = useRef<boolean>(false);
 
   // Track the latest processed BLE messages so we do not reprocess the same one
-  const lastProcessedMessageIdRef = useRef<number | null>(null);
+  const previousPacketRef = useRef<IMUPacketTiming | null>(null);
+  const sensorTimelineRef = useRef(0);
+  const recordingRef = useRef(false);
 
   // Track hold timing for progress logic
   const holdStartRef = useRef<number | null>(null);
 
-  // Optional: instantiate your Madgwick stateful filter once if needed
-  // Replace this with your actual setup if your module is class-based or stateful.
-  const madgwickRef = useRef<any>(null);
+  const filterRef = useRef(new MahonyImuFilter());
 
   useEffect(() => {
-    // Example only.
-    // If your Madgwick module requires initialization, do it here.
-    madgwickRef.current = new MadgwickFilter(1/256, 0.1); // dt=1/256s, beta=0.1 (tune as needed for responsiveness vs noise)
-    madgwickRef.current.init(0, 0, 9.81);
-    // madgwickRef.current = madgwickFilter;
-  }, [state.affectedEar]);
+    if (!ble.connected) {
+      previousPacketRef.current = null;
+      filterRef.current = new MahonyImuFilter();
+      matrixRef.current.identity();
+      offsetMatrixRef.current.identity();
+      orientationRef.current = { roll: 0, pitch: 0, yaw: 0 };
+      setLatestImuSample(null);
+    }
+  }, [ble.connected]);
 
   const calibrateOffset = useCallback(() => {
     offsetMatrixRef.current.copy(matrixRef.current).invert();
@@ -283,6 +321,7 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
     setAffectedCanal('posterior');
     setSelectedCanals([]);
     setIsTreating(false);
+    recordingRef.current = false;
     setIsRecording(false);
     setShowGuidanceArrows(true);
     setResetTime(null);
@@ -299,10 +338,10 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
     holdStartRef.current = null;
     recordedSamplesRef.current = [];
     recordingStartTimestampRef.current = null;
-    lastProcessedMessageIdRef.current = null;
-
-    madgwickRef.current = new MadgwickFilter(1/256, 0.1);
-    madgwickRef.current.init(0, 0, 9.81);
+    previousPacketRef.current = null;
+    sensorTimelineRef.current = 0;
+    recordingRef.current = false;
+    filterRef.current = new MahonyImuFilter();
   }, []);
 
   const setGyroscopeOffsets = useCallback((offsets: GyroscopeOffsets) => {
@@ -333,44 +372,38 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
       twoDigits(now.getSeconds()),
     ];
 
-    const header = ['timestamp', 'relative_timestamp_ms', 'treatment_stage', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'roll_deg', 'pitch_deg', 'yaw_deg'];
-    const rows = samples.map((sample) => [
-      sample.timestamp,
-      sample.relativeTimestampMs,
-      sample.treatmentStage,
-      sample.ax,
-      sample.ay,
-      sample.az,
-      sample.gx,
-      sample.gy,
-      sample.gz,
-      sample.roll,
-      sample.pitch,
-      sample.yaw,
-    ]);
+    const recording = {
+      format: 'treatment-imu-log',
+      formatVersion: 3,
+      processing: { filter: "Mahony", proportionalGain: 1.5, gyroDpsPerCount: 0.07, mount: "central-forehead", elapsedMsClock: "browser-arrival", sensorTimelineClock: "accumulated-valid-device-intervals" },
+      imuDeviceName: ble.deviceName,
+      startedAt: samples[0].receivedAt,
+      stoppedAt: new Date().toISOString(),
+      imuSampleCount: samples.length,
+      imuSamples: samples,
+    };
 
-    const csvContent = [header, ...rows]
-      .map((row) => row.join(','))
-      .join('\n');
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+    const content = saveAsJson ? JSON.stringify(recording, null, 2) : samplesToCsv(samples);
+    const blob = new Blob([content], { type: saveAsJson ? 'application/json;charset=utf-8' : 'text/csv;charset=utf-8' });
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
 
     link.href = url;
-    link.download = `imu-recording-${formattedTimestamp[0]}-${formattedTimestamp[1]}-${formattedTimestamp[2]}:${formattedTimestamp[3]}:${formattedTimestamp[4]}.csv`;
+    link.download = `imu-recording-${formattedTimestamp.join('-')}.${saveAsJson ? 'json' : 'csv'}`;
     link.click();
 
     window.URL.revokeObjectURL(url);
-  }, []);
+  }, [ble.deviceName, saveAsJson]);
 
   const startRecording = useCallback(() => {
     recordedSamplesRef.current = [];
     recordingStartTimestampRef.current = null;
+    recordingRef.current = true;
     setIsRecording(true);
   }, []);
 
   const stopRecording = useCallback(() => {
+    recordingRef.current = false;
     setIsRecording(false);
     downloadRecording(recordedSamplesRef.current);
     recordedSamplesRef.current = [];
@@ -386,144 +419,67 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    const latestMessage = ble.latestMessage;
-    if (!latestMessage) return;
-
-    if (lastProcessedMessageIdRef.current === latestMessage.id) return;
-    lastProcessedMessageIdRef.current = latestMessage.id;
-
-    if (latestMessage.source === 'button') {
-      return;
-    }
-
-    const rawDataArr = decodeNumericIMUPacket(latestMessage.data);
-
-    setLatestImuSample({
-      timestamp: latestMessage.timestamp,
-      ax: rawDataArr[0],
-      ay: rawDataArr[1],
-      az: rawDataArr[2],
-      gx: rawDataArr[3],
-      gy: rawDataArr[4],
-      gz: rawDataArr[5],
-    });
-
-    const dataArr = applyGyroscopeOffsets(
-      rawDataArr,
-      gyroscopeOffsetsRef.current
-    );
-
-    const correctedAcceleration = applyEarAxisBasis(
-      dataArr[0],
-      dataArr[1],
-      dataArr[2],
-      state.affectedEar
-    );
-    const correctedAngularVelocity = applyEarAxisBasis(
-      dataArr[3],
-      dataArr[4],
-      dataArr[5],
-      state.affectedEar
-    );
-    const basisCorrectedDataArr = [
-      ...correctedAcceleration,
-      ...correctedAngularVelocity,
-    ];
-
-    // console.log(dataArr);
-
-    
-    
-      /**
-       * 2) Run your existing Madgwick module here.
-       *
-       * Replace this section with your actual module API.
-       *
-       * Examples of what you might already have:
-       * - const q = madgwickRef.current.update(gx, gy, gz, ax, ay, az, dt)
-       * - const pose = madgwickRef.current.getOrientation()
-       * - const result = updateMadgwick(frame)
-       */
-    // Attempt to map IMU co-ordinates to madgwick co-ordinates
-      const filtPos = madgwickRef.current.update(
-        -basisCorrectedDataArr[1] * 9.81,
-        -basisCorrectedDataArr[2] * 9.81,
-        basisCorrectedDataArr[0] * 9.81,
-        -basisCorrectedDataArr[4],
-        -basisCorrectedDataArr[5],
-        basisCorrectedDataArr[3],
-        0.01
-      );
-
-      /**
-       * Expect your distilled output to provide orientation in some usable form.
-       * Adapt these field names to your real output.
-       *
-       * Supported examples:
-       * - quaternion: { w, x, y, z }
-       * - euler: { rollDeg, pitchDeg, yawDeg }
-       */
-
-        const [w,x,y,z] = [filtPos.qw, filtPos.qx, filtPos.qy, filtPos.qz] as [number, number, number, number];
-                  
-        const quat = new Quaternion(x, y, z, w);  // this worked with MATLAB-calculated quaternion
-        const mat = new Matrix4().makeRotationFromQuaternion(quat);
-        changeQuaternionBase(mat, quat);
-        /**
-         * 3) Update the live matrix ref used by your 3D rendering.
-         * The render code can consume this without frequent React re-renders.
-         */
-        matrixRef.current.copy(mat);
-
+  const processImuMessage = useCallback((message: ReceivedMessage) => {
+    try {
+      const packet = decodeIMUPacket(message.data);
+      if (!packet.frames.length) return;
+      const packetInterval = getConsecutiveImuPacketDeltaMs(packet, previousPacketRef.current);
+      previousPacketRef.current = packet;
+      const frameInterval = packetInterval === null ? null : packetInterval / packet.frames.length;
+      // Unknown intervals must not integrate gyro across a dropout. Keep every
+      // raw frame in the research log, with a zero-duration fusion update.
+      for (let index = 0; index < packet.frames.length; index++) {
+        const frame = packet.frames[index];
+        sensorTimelineRef.current += frameInterval ?? 0;
+        const raw = [frame.ax_g, frame.ay_g, frame.az_g, frame.gx_dps, frame.gy_dps, frame.gz_dps];
+        const data = applyGyroscopeOffsets(raw, gyroscopeOffsetsRef.current);
+        const isNewest = index === packet.frames.length - 1;
+        // Nominal central-forehead anatomical basis -> filter [z, -y, x].
+        const pose = frameInterval !== null || isNewest
+          ? filterRef.current.update(
+              data[2] * 9.81, -data[1] * 9.81, data[0] * 9.81,
+              data[5] * Math.PI / 180, -data[4] * Math.PI / 180, data[3] * Math.PI / 180,
+              (frameInterval ?? 0) / 1000
+            )
+          : null;
+        if (pose) {
+          matrixRef.current.makeRotationFromQuaternion(new Quaternion(pose.qx, pose.qy, pose.qz, pose.qw));
+        }
         const correctedQuaternion = new Quaternion();
-        const correctedMatrix = offsetMatrixRef.current.clone().multiply(matrixRef.current);
-        changeQuaternionBase(correctedMatrix, correctedQuaternion);
-        const correctedEuler = new Euler().setFromQuaternion(correctedQuaternion, 'XYZ');
-
-        setLatestSampleText(`Received data: ${basisCorrectedDataArr.map((v) => v.toFixed(2)).join(' | ')} | ${filtPos.roll.toFixed(3)} | ${filtPos.pitch.toFixed(3)} | ${filtPos.yaw.toFixed(3)}`);
-
-        orientationRef.current.roll = correctedEuler.x;
-        orientationRef.current.pitch = correctedEuler.y;
-        orientationRef.current.yaw = correctedEuler.z;
-
-        if (isRecording) {
-          if (recordingStartTimestampRef.current === null) {
-            recordingStartTimestampRef.current = latestMessage.timestamp;
-          }
-
+        changeQuaternionBase(offsetMatrixRef.current.clone().multiply(matrixRef.current), correctedQuaternion);
+        const euler = new Euler().setFromQuaternion(correctedQuaternion, 'XYZ');
+        orientationRef.current = { roll: euler.x, pitch: euler.y, yaw: euler.z };
+        if (recordingRef.current) {
+          const headAngles = calculateHeadAngles(correctedQuaternion);
+          if (recordingStartTimestampRef.current === null) recordingStartTimestampRef.current = message.timestamp;
           recordedSamplesRef.current.push({
-            timestamp: latestMessage.timestamp,
-            relativeTimestampMs: latestMessage.timestamp - recordingStartTimestampRef.current,
-            treatmentStage: state.stage === TreatmentStage.COMPLETE
-              ? 'complete'
-              : `position_${state.stage + 1}`,
-            ax: basisCorrectedDataArr[0],
-            ay: basisCorrectedDataArr[1],
-            az: basisCorrectedDataArr[2],
-            gx: basisCorrectedDataArr[3],
-            gy: basisCorrectedDataArr[4],
-            gz: basisCorrectedDataArr[5],
-            roll: orientationRef.current.roll * 180 / Math.PI,
-            pitch: orientationRef.current.pitch * 180 / Math.PI,
-            yaw: orientationRef.current.yaw * 180 / Math.PI,
+            receivedAt: new Date(message.timestamp).toISOString(),
+            elapsedMs: message.timestamp - recordingStartTimestampRef.current,
+            packetSequence: packet.seq, packetFrameIndex: index, deviceTimestampMs: packet.t0_ms,
+            sensorTimelineMs: sensorTimelineRef.current, frameIntervalMs: frameInterval,
+            timingDiscontinuity: frameInterval === null, fusionUpdated: pose !== null,
+            currentPosition: state.stage === TreatmentStage.COMPLETE ? 'complete' : `position_${state.stage + 1}`,
+            ax: frame.ax, ay: frame.ay, az: frame.az, gx: frame.gx, gy: frame.gy, gz: frame.gz,
+            axG: data[0], ayG: data[1], azG: data[2], gxDps: data[3], gyDps: data[4], gzDps: data[5],
+            quaternionW: correctedQuaternion.w, quaternionX: correctedQuaternion.x,
+            quaternionY: correctedQuaternion.y, quaternionZ: correctedQuaternion.z,
+            flexionDegrees: headAngles?.flexion ?? null,
+            axialRotationDegrees: headAngles?.axialRotation ?? null,
+            lateralFlexionDegrees: headAngles?.lateralFlexion ?? null,
+            rollDegrees: euler.x * 180 / Math.PI, pitchDegrees: euler.y * 180 / Math.PI, yawDegrees: euler.z * 180 / Math.PI,
           });
         }
+        if (isNewest && pose) {
+          setLatestImuSample({ timestamp: message.timestamp, ax: raw[0], ay: raw[1], az: raw[2], gx: raw[3], gy: raw[4], gz: raw[5] });
+          setLatestSampleText(`Received data: ${data.map((v) => v.toFixed(2)).join(' | ')} | ${pose.roll.toFixed(3)} | ${pose.pitch.toFixed(3)} | ${pose.yaw.toFixed(3)}`);
+        }
+      }
+    } catch (error) {
+      console.warn('Unable to process IMU packet:', error);
+    }
+  }, [state.stage]);
 
-        // console.log(matrixRef.current);
-
-      /**
-       * 4) Distill orientation into alignment / progress state.
-       * Replace evaluateAlignmentFromDistilledPose with your real treatment rule.
-       */
-      
-
-      /**
-       * 5) Stage logic.
-       * Replace this section with your exact treatment progression rules.
-       */
-      
-  }, [ble.latestMessage, isRecording, state.affectedEar, state.stage]);
+  useEffect(() => ble.subscribeToImuMessages(processImuMessage), [ble.subscribeToImuMessages, processImuMessage]);
 
   const value = useMemo<TreatmentContextValue>(
     () => ({
@@ -564,6 +520,8 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
 
       orientationRef,
       isRecording,
+      saveAsJson,
+      setSaveAsJson,
       startRecording,
       stopRecording,
 
@@ -592,6 +550,8 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
       clearGyroscopeOffsets,
       orientationRef,
       isRecording,
+      saveAsJson,
+      setSaveAsJson,
       startRecording,
       stopRecording,
       calibrateOffset,

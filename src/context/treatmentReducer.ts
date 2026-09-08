@@ -60,12 +60,14 @@ export function treatmentReducer(
       else return { ...state, stageProgress: 1 };
 
     case 'PROGRESS':
+      if (state.stage === TreatmentStage.COMPLETE) return state;
       return resetTimerProgress({
         ...state,
         stage: (state.stage < 3) ? (state.stage + 1) : TreatmentStage.COMPLETE,
       });
 
     case 'RETURN_TO_PREVIOUS_STAGE':
+      if (state.stage === TreatmentStage.STAGE_1) return state;
       return resetTimerProgress({
         ...state,
         stage: (state.stage > 0) ? (state.stage - 1) : TreatmentStage.STAGE_1,

@@ -76,7 +76,7 @@ function App(): JSX.Element {
               disabled={!ble.connected}
               onClick={treatment.calibrateOffset}
             >
-              Recenter head
+              Recentre head
             </Button>
           </Group>
         </Group>

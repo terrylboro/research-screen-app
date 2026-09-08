@@ -1,0 +1,37 @@
+.research-viewport {
+  height: calc(100dvh - 60px - 32px);
+  min-height: 0;
+  overflow: hidden;
+}
+.research-screen {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(280px, 1fr) 280px;
+  grid-template-rows: minmax(0, 1fr);
+  gap: 16px;
+  transform-origin: top left;
+}
+.research-video-column, .research-model-column { min-width: 0; min-height: 0; }
+.research-video-card { flex: 1; min-height: 0; }
+.research-video-column > :last-child { flex-shrink: 0; }
+.research-card-content { height: 100%; min-height: 0; }
+.research-card-content > :not(:last-child) { flex-shrink: 0; }
+.research-video-space {
+  flex: 1;
+  min-height: 0;
+  container-type: size;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.research-video-frame {
+  width: min(100cqw, calc(100cqh * 630 / 520));
+  aspect-ratio: 630 / 520;
+  flex-shrink: 0;
+}
+.research-model-column > :first-child { flex: 0.8; min-height: 0; }
+.research-model-column > :last-child { flex: 1.2; min-height: 0; }
+.research-head-frame { flex: 1; min-height: 0; display: flex; justify-content: center; overflow: hidden; }
+.research-canal-frame { flex: 1; min-height: 0; display: flex; overflow: hidden; border-radius: 8px; }
+.research-interface { align-self: start; }
+.research-angle-values { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }

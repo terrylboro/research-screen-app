@@ -8,8 +8,8 @@ type LiveWebcamProps = {
 };
 
 const LiveWebcam = ({
-  width = "100%",
-  height = 320,
+  width = 630,
+  height = 520,
   enabled = true,
 }: LiveWebcamProps) => {
   const videoRef = useRef<HTMLVideoElement | null>(null);

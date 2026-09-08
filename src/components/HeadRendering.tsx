@@ -114,17 +114,33 @@ const HeadRendering = ({calibrateMode} : HeadRenderingProps) => {
 
         let loop: number = requestAnimationFrame(animate)
 
+        // function animate() {
+        //     const qB = new THREE.Quaternion();
+        //     const corrected = offsetMatrixRef.current.clone().multiply(matrixRef.current);
+        //     changeQuaternionBase(corrected, qB);
+        //     // Applying offset
+        //     // applyYawOffset(offsetMatrixRef.current.clone(), qB)
+        //     headGroup.current.setRotationFromQuaternion(qB);
+        //     renderer.current!.render(scene.current!, cameraRef.current!)
+        //     // }
+        //     loop = requestAnimationFrame(animate)
+        // }
+
+
         function animate() {
-            const qB = new THREE.Quaternion();
-            const corrected = offsetMatrixRef.current.clone().multiply(matrixRef.current);
-            changeQuaternionBase(corrected, qB);
-            // Applying offset
-            // applyYawOffset(offsetMatrixRef.current.clone(), qB)
-            headGroup.current.setRotationFromQuaternion(qB);
-            renderer.current!.render(scene.current!, cameraRef.current!)
-            // }
-            loop = requestAnimationFrame(animate)
+            const targetQuaternion = new THREE.Quaternion();
+            const corrected = offsetMatrixRef.current
+                .clone()
+                .multiply(matrixRef.current);
+
+            changeQuaternionBase(corrected, targetQuaternion);
+
+            headGroup.current!.setRotationFromQuaternion(targetQuaternion);
+            renderer.current!.render(scene.current!, cameraRef.current!);
+
+            loop = requestAnimationFrame(animate);
         }
+
 
         return () => {
             cancelAnimationFrame(loop)
