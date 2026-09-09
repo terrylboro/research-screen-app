@@ -5,13 +5,19 @@ type LiveWebcamProps = {
   width?: number | string;
   height?: number | string;
   enabled?: boolean;
+  deviceId?: string | null;
+  onStreamReady?: () => void;
 };
 
 const LiveWebcam = ({
   width = 630,
   height = 520,
   enabled = true,
+  deviceId = null,
+  onStreamReady,
 }: LiveWebcamProps) => {
+  const onStreamReadyRef = useRef(onStreamReady);
+  onStreamReadyRef.current = onStreamReady;
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -47,7 +53,7 @@ const LiveWebcam = ({
         setIsLoading(true);
 
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: true,
+          video: deviceId ? { deviceId: { exact: deviceId } } : true,
           audio: false,
         });
 
@@ -57,12 +63,15 @@ const LiveWebcam = ({
         }
 
         streamRef.current = stream;
+        // Permission unlocks camera labels and additional devices.
+        onStreamReadyRef.current?.();
 
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play().catch(() => undefined);
         }
       } catch (err) {
+        if (isCancelled) return;
         const message =
           err instanceof Error
             ? err.message
@@ -81,7 +90,7 @@ const LiveWebcam = ({
       isCancelled = true;
       stopStream();
     };
-  }, [enabled]);
+  }, [enabled, deviceId]);
 
   return (
     <Box

@@ -50,7 +50,7 @@ const CanalRendering = () => {
     const [active, setActive] = useState(true)
 
     // Using TreatmentProvider context to get the necessary variables for rendering and alignment
-    const {matrixRef, offsetMatrixRef, alignmentRef, alignedRef, state, dispatch, showGuidanceArrows, setShowGuidanceArrows} = useTreatment();
+    const {calibrationActive, matrixRef, offsetMatrixRef, alignmentRef, alignedRef, state, dispatch, showGuidanceArrows, setShowGuidanceArrows} = useTreatment();
 
     // Setup sounds
     const [playAligned] = useSound(process.env.PUBLIC_URL + "/sounds/aligned.mp3")
@@ -59,8 +59,8 @@ const CanalRendering = () => {
     const highlightedMeshPart = getHighlightedMeshPart(state.affectedCanal, state.stage, state.isAligned)
 
     // Read changing alignment/sound state without rebuilding the Three.js scene.
-    const liveRef = useRef({ state, playAligned, playNotAligned });
-    liveRef.current = { state, playAligned, playNotAligned };
+    const liveRef = useRef({ state, playAligned, playNotAligned, calibrationActive });
+    liveRef.current = { state, playAligned, playNotAligned, calibrationActive };
 
     // Scene setting variables
     const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -244,7 +244,8 @@ const CanalRendering = () => {
         let loop: number = requestAnimationFrame(animate)
         const clock = new THREE.Clock();
         function animate() {
-            const { state, playAligned, playNotAligned } = liveRef.current;
+            const { state, playAligned, playNotAligned, calibrationActive } = liveRef.current;
+            if (calibrationActive) lastAlignment = false;
 
             // Opacity pulsing effect
             const t = clock.getElapsedTime();
@@ -294,7 +295,7 @@ const CanalRendering = () => {
                     })
                 })
     
-                if (alignedRef!.current && !lastAlignment) {
+                if (!calibrationActive && alignedRef!.current && !lastAlignment) {
                     lastAlignment = true;
                     // Handle the case where the canal becomes aligned
                     // dispatch({ type: 'TOGGLE_ALIGNED' })
@@ -302,7 +303,7 @@ const CanalRendering = () => {
                     dispatch({ type: 'ALIGNMENT_ENTER' })
                 }
 
-                else if (!alignedRef!.current && lastAlignment) {
+                else if (!calibrationActive && !alignedRef!.current && lastAlignment) {
                     lastAlignment = false;
                     if (state.stage !== TreatmentStage.COMPLETE) playNotAligned();
                     // Handle case where canal loses alignment

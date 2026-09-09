@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Card, Group, Stack, Text, Box, Switch } from '@mantine/core';
+import { Button, Card, Group, Stack, Text, Box, Switch, Select } from '@mantine/core';
 import HeadRendering from './HeadRendering';
 import CanalRendering from './CanalRendering';
 import HeadOrientationValues from './HeadOrientationValues';
@@ -9,9 +9,11 @@ import AlignmentProgress from '../custom/alignmentProgress';
 import LiveWebcam from './LiveWebcam';
 import SimpleTimer from '../custom/simpleTimer';
 import './ResearchScreen.css';
+import { useVideoDevices } from '../hooks/useVideoDevices';
 
 export default function ResearchScreen() {
   const treatment = useTreatment();
+  const cameras = useVideoDevices();
   const [cameraEnabled, setCameraEnabled] = useState(true);
   const viewportRef = useRef<HTMLDivElement>(null);
   const [fit, setFit] = useState({ width: '100%', height: '100%', scale: 1 });
@@ -38,11 +40,22 @@ export default function ResearchScreen() {
             <Stack className="research-card-content" gap="md">
               <Group justify="space-between">
                 <Text fw={600}>Canal Video</Text>
+                <Select
+                aria-label="Camera source"
+                value={cameras.deviceId ?? 'default-camera'}
+                onChange={(value) => cameras.setDeviceId(value === 'default-camera' ? null : value)}
+                data={[
+                  ...cameras.devices.map((device, index) => ({ value: device.deviceId, label: device.label || `Camera ${index + 1}` })),
+                ]}
+                allowDeselect={false}
+                error={cameras.error}
+              />
                 <Switch checked={cameraEnabled} label="Camera" onChange={(event) => setCameraEnabled(event.currentTarget.checked)} />
               </Group>
+              
               <Box className="research-video-space">
                 <Box className="research-video-frame">
-                  <LiveWebcam width="100%" height="100%" enabled={cameraEnabled} />
+                  <LiveWebcam width="100%" height="100%" enabled={cameraEnabled} deviceId={cameras.deviceId} onStreamReady={cameras.refresh} />
                 </Box>
               </Box>
             </Stack>
@@ -63,7 +76,7 @@ export default function ResearchScreen() {
                 <Text fw={600}>Canal Alignment</Text>
                 <Text size="sm">{(treatment.alignmentRef!.current * 100).toFixed(0)}%</Text>
               </Group>
-              <Switch checked={treatment.showGuidanceArrows} label="Show arrows" onChange={(event) => treatment.setShowGuidanceArrows(event.currentTarget.checked)} />
+              {/* <Switch checked={treatment.showGuidanceArrows} label="Show arrows" onChange={(event) => treatment.setShowGuidanceArrows(event.currentTarget.checked)} /> */}
               <AlignmentProgress score={treatment.alignmentRef!.current} greenThreshold={treatment.state.stage === TreatmentStage.STAGE_2 ? 75 : 85} />
               <Box className="research-canal-frame"><CanalRendering /></Box>
             </Stack>

@@ -90,3 +90,43 @@ it('handles firmware navigation in order, ignores other commands, and bounds sta
     expect(mockButtonListener).toBeNull();
   }
 });
+
+it('applies the mounting matrix before fusion while publishing raw calibration samples', () => {
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement('div'));
+  try {
+    act(() => root.render(<TreatmentProvider><Probe /></TreatmentProvider>));
+    act(() => context.setSensorToAnatomicalMatrix([0, 1, 0, -1, 0, 0, 0, 0, 1]));
+    act(() => mockListener(packet(0, 100)));
+    expect(context.latestImuSample.ax).toBeCloseTo(1, 2);
+    expect(context.latestImuSample.ay).toBe(0);
+    const q = new Quaternion().setFromRotationMatrix(context.matrixRef.current);
+    expect(q.angleTo(new Quaternion())).toBeCloseTo(Math.PI / 2);
+    act(() => context.calibrateOffset());
+    const relative = context.offsetMatrixRef.current.clone().multiply(context.matrixRef.current);
+    expect(new Quaternion().setFromRotationMatrix(relative).angleTo(new Quaternion())).toBeCloseTo(0);
+  } finally { act(() => root.unmount()); }
+});
+
+it('pauses hold timing and firmware treatment navigation during calibration', () => {
+  jest.useFakeTimers();
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  const root = createRoot(document.createElement('div'));
+  try {
+    act(() => root.render(<TreatmentProvider><Probe /></TreatmentProvider>));
+    act(() => context.dispatch({ type: 'ALIGNMENT_ENTER' }));
+    act(() => jest.advanceTimersByTime(250));
+    const elapsed = context.state.timerElapsedTime;
+    act(() => context.setCalibrationActive(true));
+    act(() => {
+      mockButtonListener({ data: new DataView(Uint8Array.from([1]).buffer) });
+      jest.advanceTimersByTime(10000);
+    });
+    expect(context.state.stage).toBe(0);
+    expect(context.state.timerElapsedTime).toBe(elapsed);
+    act(() => context.setCalibrationActive(false));
+    act(() => context.dispatch({ type: 'ALIGNMENT_ENTER' }));
+    act(() => jest.advanceTimersByTime(100));
+    expect(context.state.timerElapsedTime - elapsed).toBeLessThanOrEqual(100);
+  } finally { act(() => root.unmount()); jest.useRealTimers(); }
+});

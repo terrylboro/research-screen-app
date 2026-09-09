@@ -55,7 +55,7 @@ export function treatmentReducer(
 
     case 'ALIGNMENT_EXIT':
       if (state.stage !== TreatmentStage.COMPLETE) {
-        return { ...state, isAligned: false, timerOn: false };
+        return { ...state, isAligned: false, timerOn: false, lastTickTime: null };
       }
       else return { ...state, stageProgress: 1 };
 

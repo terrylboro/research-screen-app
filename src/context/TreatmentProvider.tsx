@@ -15,9 +15,11 @@ import { decodeIMUPacket, getConsecutiveImuPacketDeltaMs, IMUPacketTiming } from
 import type { ReceivedMessage } from '../hooks/useBleDeviceInternal';
 
 import { calculateHeadAngles } from '../utils/headKinematics';
+import { applySensorToAnatomicalMatrix, SensorToAnatomicalMatrix } from '../utils/sensorSegmentAlignment';
 import { samplesToCsv } from '../utils/recordingCsv';
 import { MahonyImuFilter } from '../utils/mahonyImuFilter';
 import { changeQuaternionBase } from '../utils/changeBase';
+
 
 import { treatmentReducer, initialState } from './treatmentReducer';
 import { TreatmentState, Action, EarSide, CanalType, TreatmentStage } from '../types/treatmentTypes';
@@ -68,6 +70,10 @@ type TreatmentContextValue = {
   gyroscopeOffsets: GyroscopeOffsets;
   setGyroscopeOffsets: (offsets: GyroscopeOffsets) => void;
   clearGyroscopeOffsets: () => void;
+  sensorToAnatomicalMatrix: SensorToAnatomicalMatrix | null;
+  setSensorToAnatomicalMatrix: (matrix: SensorToAnatomicalMatrix | null) => void;
+  calibrationActive: boolean;
+  setCalibrationActive: (active: boolean) => void;
 
   orientationRef: React.MutableRefObject<{
     roll: number;
@@ -129,6 +135,11 @@ export type GyroscopeOffsets = {
   gx: number;
   gy: number;
   gz: number;
+};
+
+export type FunctionalCalibration = {
+  nodPeak: GyroscopeOffsets;
+  shakePeak: GyroscopeOffsets;
 };
 
 export type LatestImuSample = {
@@ -224,8 +235,18 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
 
   // Access BLE data from provider
   const ble = useBleDevice();
+  const calibrationActiveRef = useRef(false);
+  const [calibrationActive, setCalibrationActiveState] = useState(false);
+  const setCalibrationActive = useCallback((active: boolean) => {
+    calibrationActiveRef.current = active;
+    setCalibrationActiveState(active);
+    dispatch({ type: 'ALIGNMENT_EXIT' });
+  }, []);
+  const [sensorToAnatomicalMatrix, setSensorMatrixState] = useState<SensorToAnatomicalMatrix | null>(null);
+  const sensorMatrixRef = useRef<SensorToAnatomicalMatrix | null>(null);
 
   useEffect(() => ble.subscribeToButtonMessages((message) => {
+    if (calibrationActiveRef.current) return;
     // Firmware navigation commands: uint8 or little-endian uint16.
     // Ignore empty, malformed and unrelated notifications (e.g. power-down).
     if (message.data.byteLength !== 1 && message.data.byteLength !== 2) return;
@@ -295,6 +316,15 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
     }
   }, [ble.connected]);
 
+  const setSensorToAnatomicalMatrix = useCallback((matrix: SensorToAnatomicalMatrix | null) => {
+    sensorMatrixRef.current = matrix;
+    setSensorMatrixState(matrix);
+    filterRef.current = new MahonyImuFilter();
+    matrixRef.current.identity();
+    offsetMatrixRef.current.identity();
+    orientationRef.current = { roll: 0, pitch: 0, yaw: 0 };
+  }, []);
+
   const calibrateOffset = useCallback(() => {
     offsetMatrixRef.current.copy(matrixRef.current).invert();
     // setCurrentStage('calibration');
@@ -327,6 +357,8 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
     setResetTime(null);
     setStageProgress(0);
     setLatestSampleText('Waiting for data');
+    sensorMatrixRef.current = null;
+    setSensorMatrixState(null);
     setLatestImuSample(null);
 
     matrixRef.current.identity();
@@ -413,6 +445,7 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
   // Timer checking action for hold-based progression logic
   useEffect(() => {
     const id = setInterval(() => {
+      if (calibrationActiveRef.current) return;
       dispatch({ type: 'TIMER_TICK', now: Date.now() });
     }, 50); // ~20Hz
 
@@ -432,7 +465,12 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
         const frame = packet.frames[index];
         sensorTimelineRef.current += frameInterval ?? 0;
         const raw = [frame.ax_g, frame.ay_g, frame.az_g, frame.gx_dps, frame.gy_dps, frame.gz_dps];
-        const data = applyGyroscopeOffsets(raw, gyroscopeOffsetsRef.current);
+        const corrected = applyGyroscopeOffsets(raw, gyroscopeOffsetsRef.current);
+        const matrix = sensorMatrixRef.current;
+        const data = matrix ? [
+          ...applySensorToAnatomicalMatrix(matrix, corrected[0], corrected[1], corrected[2]),
+          ...applySensorToAnatomicalMatrix(matrix, corrected[3], corrected[4], corrected[5]),
+        ] : corrected;
         const isNewest = index === packet.frames.length - 1;
         // Nominal central-forehead anatomical basis -> filter [z, -y, x].
         const pose = frameInterval !== null || isNewest
@@ -517,6 +555,10 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
       gyroscopeOffsets,
       setGyroscopeOffsets,
       clearGyroscopeOffsets,
+      sensorToAnatomicalMatrix,
+      setSensorToAnatomicalMatrix,
+      calibrationActive,
+      setCalibrationActive,
 
       orientationRef,
       isRecording,
@@ -548,6 +590,10 @@ export function TreatmentProvider({children,}: {children: React.ReactNode;}) {
       gyroscopeOffsets,
       setGyroscopeOffsets,
       clearGyroscopeOffsets,
+      sensorToAnatomicalMatrix,
+      setSensorToAnatomicalMatrix,
+      calibrationActive,
+      setCalibrationActive,
       orientationRef,
       isRecording,
       saveAsJson,

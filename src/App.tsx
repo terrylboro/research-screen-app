@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { AppShell, Badge, Button, Group, Modal, Select, Text, useMantineTheme } from '@mantine/core';
 import ResearchScreen from './components/ResearchScreen';
 import GyroscopeCalibration from './components/GyroscopeCalibration';
@@ -11,6 +11,14 @@ function App(): JSX.Element {
   const ble = useBleDevice();
   const treatment = useTreatment();
   const [calibrationOpen, setCalibrationOpen] = useState(false);
+
+  const closeCalibration = useCallback(() => {
+    setCalibrationOpen(false);
+    treatment.setCalibrationActive(false);
+  }, [treatment.setCalibrationActive]);
+  useEffect(() => {
+    if (calibrationOpen && !ble.connected) closeCalibration();
+  }, [ble.connected, calibrationOpen, closeCalibration]);
 
   const selectEar = (ear: string | null) => {
     if (ear === 'left' || ear === 'right') {
@@ -66,17 +74,17 @@ function App(): JSX.Element {
             </Button>
             <Button
               color="teal"
-              disabled={!ble.connected}
-              onClick={() => setCalibrationOpen(true)}
+              disabled={!ble.connected || treatment.isRecording}
+              onClick={() => { treatment.setCalibrationActive(true); setCalibrationOpen(true); }}
             >
-              Calibrate gyroscope
+              Calibrate System
             </Button>
             <Button
               color="cyan"
               disabled={!ble.connected}
               onClick={treatment.calibrateOffset}
             >
-              Recentre head
+              Recentre Head
             </Button>
           </Group>
         </Group>
@@ -84,12 +92,13 @@ function App(): JSX.Element {
 
       <Modal
         opened={calibrationOpen}
-        onClose={() => setCalibrationOpen(false)}
-        title="Gyroscope calibration"
+        onClose={closeCalibration}
+        title="IMU calibration"
+        size="xl"
         centered
         closeOnClickOutside={false}
       >
-        <GyroscopeCalibration onComplete={() => setCalibrationOpen(false)} />
+        {calibrationOpen && <GyroscopeCalibration onComplete={closeCalibration} onBack={closeCalibration} />}
       </Modal>
 
       <AppShell.Main style={{ height: '100vh', overflow: 'hidden', background: theme.colors.gray[0] }}>

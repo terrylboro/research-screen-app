@@ -33,11 +33,10 @@ acceleration gate 0.85–1.15 g). Notifications are processed directly, with valid
 device packet intervals divided equally across all chronological frames. The
 nominal mount is central forehead: filter axes are [sensor Z, -sensor Y, sensor X].
 Ear selection affects treatment/display choices, not sensor coordinates. Existing
-manual gyro calibration and forward-zero controls remain; recalibrate gyro bias
-because legacy offsets use a different scale. Guided anatomical calibration and
-adaptive bias tracking are not enabled in this research pipeline.
+guided IMU calibration and forward-zero controls are available. Calibrate gyroscope
+opens the NHS-style still/nod/shake popup. Adaptive bias tracking is not enabled.
 
-JSON format version 2 retains the existing fields and records every raw frame.
+JSON format version 3 retains the existing fields and records every raw frame.
 receivedAt and elapsedMs retain browser-arrival semantics (shared within a packet).
 sensorTimelineMs accumulates valid device intervals; frameIntervalMs is null at
 startup, reconnect or a discontinuity. timingDiscontinuity flags those rows.
@@ -66,3 +65,21 @@ lateralFlexionDegrees for every sample, using the same quaternion calculation
 and current sign convention as the live display. Undefined angles are empty CSV
 cells or JSON nulls. JSON format version 3 retains session metadata; CSV contains
 one header row and one row per IMU sample, including all existing sample fields.
+
+
+Calibration popup: mount the sensor centrally on the forehead, then press Start
+calibration. After three seconds of settling it records three seconds of
+stillness, detects two nods and two shakes, and repeats failed checks. Movement
+steps allow 30 seconds and may request a third cycle when axes disagree. The
+same NHS movement-axis analysis and stillness thresholds are used. Once all
+checks pass, gyro bias and the sensor-to-anatomical matrix are installed and
+fusion restarts in the calibrated basis. Look straight ahead and press Finish
+calibration to recentre and return to research. This does not start a recording.
+Gyro bias is stored locally; mounting calibration is retained for the session.
+
+Treatment hold timing and device-button treatment navigation pause while the
+popup is open. Device Progress starts/finishes calibration; device Go Back
+cancels the popup. Closing or disconnecting cancels pending timers and retries.
+Calibration is unavailable while a research recording is active. Cancelling
+before the checks pass leaves the previous calibration in place; after they pass,
+the validated bias/matrix are already applied even if the popup is then closed.
